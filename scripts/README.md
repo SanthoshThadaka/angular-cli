@@ -11,13 +11,6 @@ $ npm link
 This will link the binaries included in this repository, which includes the `devkit-admin` binary. This document
 describes each scripts available.
 
-## benchmark
-
-Runs all benchmarks of the repo. Benchmarks are run like Jasmine tests, but when the test are passing also record
-performance metrics. An example is the file `packages/angular_devkit/core/src/json/parser_benchmark.ts`.
-
-There's no flags associated with this script.
-
 ## build
 
 Builds the repo and the pack files. The output of `build` is in `dist/` and contains 1 tgz per package which can be
@@ -41,14 +34,6 @@ Flags:
   will be outputted to stdout.
 * `--githubTokenFile=<path>`. Reads the githubToken from a file instead of the command line (for CI).
 * `--stdout`. Skip the whole release note process and output the markdown to stdout instead.
-
-## lint
-
-Runs tslint on the whole repo.
-
-Flags:
-
-* `--fix`. Also applies fixes.
 
 ## packages
 
@@ -121,21 +106,17 @@ Flags:
 
 Compile and outputs the templates. For now, only README is being built and outputted.
 
-## test
+## bazel:test
 
-Run unit or large tests. Tests will exclude all files that excluded from `tsconfig.json`.
+Run API and unit tests using Bazel.
 
-Flags:
+## bazel:integration
 
-* `--large`. Run the large tests (`**/*_spec_large.ts`).
-* `--full`. Run all the tests. By default only runs tests in packages that have changed since the last release.
-* `--spec-reporter`. Use the spec reporter (instead of the default one).
-* `--glob=<glob string>`. Only run the tests that match the glob pattern.
-* `--code-coverage`. Outputs code coverage for the tests run.
+Run integration tests using Bazel.
 
 ## validate
 
-Performs BUILD files, commit messages and license validation.
+Performs BUILD files and license validation.
 
 Flags:
 

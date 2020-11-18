@@ -5,7 +5,7 @@
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import { logging } from '@angular-devkit/core';
+import { analytics, logging } from '@angular-devkit/core';
 import { Observable } from 'rxjs';
 import { Url } from 'url';
 import { FileEntry, MergeStrategy, Tree } from '../tree/interface';
@@ -76,11 +76,10 @@ export type SchematicDescription<CollectionMetadataT extends object,
  * parameters contain additional metadata that you want to store while remaining type-safe.
  */
 export interface EngineHost<CollectionMetadataT extends object, SchematicMetadataT extends object> {
-  createCollectionDescription(name: string): CollectionDescription<CollectionMetadataT>;
-  /**
-   * @deprecated Use `listSchematicNames`.
-   */
-  listSchematics(collection: Collection<CollectionMetadataT, SchematicMetadataT>): string[];
+  createCollectionDescription(
+    name: string,
+    requester?: CollectionDescription<CollectionMetadataT>,
+  ): CollectionDescription<CollectionMetadataT>;
   listSchematicNames(collection: CollectionDescription<CollectionMetadataT>): string[];
 
   createSchematicDescription(
@@ -120,24 +119,27 @@ export interface EngineHost<CollectionMetadataT extends object, SchematicMetadat
  * SchematicMetadataT is a type that contains additional typing for the Schematic Description.
  */
 export interface Engine<CollectionMetadataT extends object, SchematicMetadataT extends object> {
-  createCollection(name: string): Collection<CollectionMetadataT, SchematicMetadataT>;
+  createCollection(
+    name: string,
+    requester?: Collection<CollectionMetadataT, SchematicMetadataT>,
+  ): Collection<CollectionMetadataT, SchematicMetadataT>;
   createContext(
     schematic: Schematic<CollectionMetadataT, SchematicMetadataT>,
     parent?: Partial<TypedSchematicContext<CollectionMetadataT, SchematicMetadataT>>,
     executionOptions?: Partial<ExecutionOptions>,
   ): TypedSchematicContext<CollectionMetadataT, SchematicMetadataT>;
   createSchematic(
-      name: string,
-      collection: Collection<CollectionMetadataT, SchematicMetadataT>,
+    name: string,
+    collection: Collection<CollectionMetadataT, SchematicMetadataT>,
   ): Schematic<CollectionMetadataT, SchematicMetadataT>;
   createSourceFromUrl(
     url: Url,
     context: TypedSchematicContext<CollectionMetadataT, SchematicMetadataT>,
   ): Source;
   transformOptions<OptionT extends object, ResultT extends object>(
-      schematic: Schematic<CollectionMetadataT, SchematicMetadataT>,
-      options: OptionT,
-      context?: TypedSchematicContext<CollectionMetadataT, SchematicMetadataT>,
+    schematic: Schematic<CollectionMetadataT, SchematicMetadataT>,
+    options: OptionT,
+    context?: TypedSchematicContext<CollectionMetadataT, SchematicMetadataT>,
   ): Observable<ResultT>;
   executePostTasks(): Observable<void>;
 
@@ -192,6 +194,10 @@ export interface TypedSchematicContext<CollectionMetadataT extends object,
   readonly strategy: MergeStrategy;
   readonly interactive: boolean;
   addTask<T>(task: TaskConfigurationGenerator<T>, dependencies?: Array<TaskId>): TaskId;
+
+  // This might be undefined if the feature is unsupported.
+  /** @deprecated since version 11 - as it's unused. */
+  readonly analytics?: analytics.Analytics;
 }
 
 
@@ -227,4 +233,5 @@ export type AsyncFileOperator = (tree: FileEntry) => Observable<FileEntry | null
  * know which types is the schematic or collection metadata, as they are both tooling specific.
  */
 export type Source = (context: SchematicContext) => Tree | Observable<Tree>;
-export type Rule = (tree: Tree, context: SchematicContext) => Tree | Observable<Tree> | Rule | void;
+export type Rule = (tree: Tree, context: SchematicContext) =>
+  Tree | Observable<Tree> | Rule | Promise<void | Rule> | void;

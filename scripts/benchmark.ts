@@ -6,12 +6,13 @@
  * found in the LICENSE file at https://angular.io/license
  */
 // tslint:disable:no-implicit-dependencies
-import { tags, terminal } from '@angular-devkit/core';
+// tslint:disable:no-console
+import { tags } from '@angular-devkit/core';
+import * as colors from 'ansi-colors';
 import * as glob from 'glob';
 import 'jasmine';
 import { SpecReporter as JasmineSpecReporter } from 'jasmine-spec-reporter';
 import { join, relative } from 'path';
-
 
 const Jasmine = require('jasmine');
 
@@ -20,11 +21,9 @@ require('source-map-support').install({
   hookRequire: true,
 });
 
-
 declare const global: {
   benchmarkReporter: {};
 };
-
 
 interface BenchmarkResult {
   count: number;
@@ -36,9 +35,8 @@ interface BenchmarkResult {
   base?: BenchmarkResult;
 }
 
-
 class BenchmarkReporter extends JasmineSpecReporter implements jasmine.CustomReporter {
-  private _stats: BenchmarkResult | null;
+  private _stats: BenchmarkResult | null = null;
 
   constructor() {
     super({
@@ -91,7 +89,8 @@ class BenchmarkReporter extends JasmineSpecReporter implements jasmine.CustomRep
         const baseAverage = pad(Math.floor(stat.base.average));
         const baseAverageMult = pad(precision(stat.average / stat.base.average), multPad);
 
-        console.log(terminal.colors.yellow(tags.indentBy(6)`
+        console.log(
+          colors.yellow(tags.indentBy(6)`
           count:   ${count}
           fastest: ${fastest}
             (base) ${baseFastest}
@@ -99,15 +98,18 @@ class BenchmarkReporter extends JasmineSpecReporter implements jasmine.CustomRep
             (base) ${baseSlowest}
           mean:    ${mean} (${baseMean}) (${baseMeanMult}x)
           average: ${average} (${baseAverage}) (${baseAverageMult}x)
-        `));
+        `),
+        );
       } else {
-        console.log(terminal.colors.yellow(tags.indentBy(6)`
+        console.log(
+          colors.yellow(tags.indentBy(6)`
           count:   ${count}
           fastest: ${fastest}
           slowest: ${slowest}
           mean:    ${mean}
           average: ${average}
-        `));
+        `),
+        );
       }
     }
   }
@@ -119,7 +121,6 @@ class BenchmarkReporter extends JasmineSpecReporter implements jasmine.CustomRep
   }
 }
 
-
 // Create a Jasmine runner and configure it.
 const runner = new Jasmine({ projectBaseDir: projectBaseDir });
 
@@ -127,13 +128,11 @@ runner.env.clearReporters();
 global.benchmarkReporter = new BenchmarkReporter();
 runner.env.addReporter(global.benchmarkReporter);
 
-
 // Run the tests.
-const allTests =
-  glob.sync('packages/**/*_benchmark.ts')
-    .map(p => relative(projectBaseDir, p))
-    .filter(p => !/schematics_cli\/schematics\//.test(p));
-
+const allTests = glob
+  .sync('packages/**/*_benchmark.ts')
+  .map(p => relative(projectBaseDir, p))
+  .filter(p => !/schematics_cli\/schematics\//.test(p));
 
 export default function(_args: {}) {
   return new Promise(resolve => {

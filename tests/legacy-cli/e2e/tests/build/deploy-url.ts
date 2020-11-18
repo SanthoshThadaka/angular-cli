@@ -1,15 +1,14 @@
 import { ng } from '../../utils/process';
 import { copyProjectAsset } from '../../utils/assets';
-import { expectFileToMatch, writeMultipleFiles } from '../../utils/fs';
-import { updateJsonFile } from '../../utils/project';
-import { getGlobalVariable } from '../../utils/env';
-
+import { appendToFile, expectFileToMatch, writeMultipleFiles } from '../../utils/fs';
 
 export default function () {
   return Promise.resolve()
     .then(() => writeMultipleFiles({
       'src/styles.css': 'div { background: url("./assets/more.png"); }',
+      'src/lazy.ts': 'export const lazy = "lazy";',
     }))
+    .then(() => appendToFile('src/main.ts', 'import("./lazy");'))
     // use image with file size >10KB to prevent inlining
     .then(() => copyProjectAsset('images/spectrum.png', './src/assets/more.png'))
     .then(() => ng('build', '--deploy-url=deployUrl/', '--extract-css'))
@@ -24,9 +23,5 @@ export default function () {
     .then(() => expectFileToMatch('dist/test-project/styles.js',
       /\(['"]?deployUrl\/more\.png['"]?\)/))
     .then(() => expectFileToMatch('dist/test-project/runtime.js',
-      /__webpack_require__\.p = "deployUrl\/";/));
-    // // verify slash is appended to the end of --deploy-url if missing
-    // .then(() => ng('build', '--deploy-url=deployUrl', '--extract-css=false'))
-    // .then(() =>
-    //   expectFileToMatch('dist/test-project/untime.js', /__webpack_require__\.p = "deployUrl\/";/));
+      /__webpack_require__\.p\s*=\s*"deployUrl\/";/));
 }

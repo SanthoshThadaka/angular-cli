@@ -5,9 +5,6 @@
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-
-import { experimental } from '@angular-devkit/core';
-
 export enum ProjectType {
     Application = 'application',
     Library = 'library',
@@ -19,7 +16,8 @@ export enum Builders {
     Browser = '@angular-devkit/build-angular:browser',
     Karma = '@angular-devkit/build-angular:karma',
     TsLint = '@angular-devkit/build-angular:tslint',
-    NgPackagr = '@angular-devkit/build-ng-packagr:build',
+    DeprecatedNgPackagr = '@angular-devkit/build-ng-packagr:build',
+    NgPackagr = '@angular-devkit/build-angular:ng-packagr',
     DevServer = '@angular-devkit/build-angular:dev-server',
     ExtractI18n = '@angular-devkit/build-angular:extract-i18n',
     Protractor = '@angular-devkit/build-angular:protractor',
@@ -37,16 +35,18 @@ export interface BrowserBuilderBaseOptions {
     outputPath?: string;
     index?: string;
     polyfills: string;
-    assets?: object[];
-    styles?: string[];
-    scripts?: string[];
+    assets?: (object|string)[];
+    styles?: (object|string)[];
+    scripts?: (object|string)[];
     sourceMap?: boolean;
 }
+
+export type OutputHashing = 'all' | 'media' | 'none' | 'bundles';
 
 export interface BrowserBuilderOptions extends BrowserBuilderBaseOptions {
     serviceWorker?: boolean;
     optimization?: boolean;
-    outputHashing?: 'all';
+    outputHashing?: OutputHashing;
     resourcesOutputPath?: string;
     extractCss?: boolean;
     namedChunks?: boolean;
@@ -60,7 +60,7 @@ export interface BrowserBuilderOptions extends BrowserBuilderBaseOptions {
         maximumWarning?: string;
         maximumError?: string;
     }[];
-    es5BrowserSupport?: boolean;
+    webWorkerTsConfig?: string;
 }
 
 export interface ServeBuilderOptions {
@@ -72,15 +72,20 @@ export interface LibraryBuilderOptions {
 }
 
 export interface ServerBuilderOptions {
-    outputPath: string;
-    tsConfig: string;
-    main: string;
-    fileReplacements?: FileReplacements[];
-    optimization?: {
-        scripts?: boolean;
-        styles?: boolean;
-    };
-    sourceMap?: boolean;
+  outputPath: string;
+  tsConfig: string;
+  main: string;
+  fileReplacements?: FileReplacements[];
+  optimization?: {
+    scripts?: boolean;
+    styles?: boolean;
+  };
+  sourceMap?: boolean | {
+    scripts?: boolean;
+    styles?: boolean;
+    hidden?: boolean;
+    vendor?: boolean;
+  };
 }
 
 export interface AppShellBuilderOptions {
@@ -126,18 +131,26 @@ export type ServeBuilderTarget = BuilderTarget<Builders.DevServer, ServeBuilderO
 export type ExtractI18nBuilderTarget = BuilderTarget<Builders.ExtractI18n, ExtractI18nOptions>;
 export type E2EBuilderTarget = BuilderTarget<Builders.Protractor, E2EOptions>;
 
-export interface WorkspaceSchema extends experimental.workspace.WorkspaceSchema {
+export interface WorkspaceSchema {
+    version: 1;
+    defaultProject?: string;
+    cli?: { warnings?: Record<string, boolean> };
     projects: {
         [key: string]: WorkspaceProject<ProjectType.Application | ProjectType.Library>;
     };
 }
 
-export interface WorkspaceProject<TProjectType extends ProjectType = ProjectType.Application>
-    extends experimental.workspace.WorkspaceProject {
+export interface WorkspaceProject<TProjectType extends ProjectType = ProjectType.Application> {
     /**
     * Project type.
     */
     projectType: ProjectType;
+
+    root: string;
+    sourceRoot: string;
+    prefix: string;
+
+    cli?: { warnings?: Record<string, boolean> };
 
     /**
      * Tool options.

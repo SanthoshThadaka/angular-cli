@@ -14,14 +14,6 @@ import { addUndefinedDefaults } from './transforms';
 
 describe('CoreSchemaRegistry', () => {
   it('works asynchronously', done => {
-    if (process.platform.startsWith('win')) {
-      // This test consistently fails on Windows BuildKite, but doesn't fail on local Windows
-      // or in Appveyor. Many tests test the async behaviour of the registry, but this is the only
-      // one that also fetches an async ref. Perhaps that is why.
-      done();
-
-      return;
-    }
     const registry = new CoreSchemaRegistry();
     registry.addPostTransform(addUndefinedDefaults);
     const data: any = {};  // tslint:disable-line:no-any
@@ -38,7 +30,7 @@ describe('CoreSchemaRegistry', () => {
             },
           },
           tslint: {
-            $ref: 'http://json.schemastore.org/tslint#',
+            $ref: 'https://json.schemastore.org/tslint#',
           },
         },
       })
@@ -394,63 +386,35 @@ describe('CoreSchemaRegistry', () => {
     expect(result.data).toBe(data);
   });
 
-  it('adds undefined properties', done => {
+  it('adds deprecated options usage', done => {
     const registry = new CoreSchemaRegistry();
-    registry.addPostTransform(addUndefinedDefaults);
-    const data: any = {};  // tslint:disable-line:no-any
+    const deprecatedMessages: string[] = [];
+    registry.useXDeprecatedProvider(m => deprecatedMessages.push(m));
+
+    const data = {
+      foo: true,
+      bar: true,
+      bat: true,
+    };
 
     registry
       .compile({
         properties: {
-          bool: { type: 'boolean' },
-          str: { type: 'string', default: 'someString' },
-          obj: {
-            properties: {
-              num: { type: 'number' },
-              other: { type: 'number', default: 0 },
-            },
-          },
-          objAllOk: {
-            allOf: [
-              { type: 'object' },
-            ],
-          },
-          objAllBad: {
-            allOf: [
-              { type: 'object' },
-              { type: 'number' },
-            ],
-          },
-          objOne: {
-            oneOf: [
-              { type: 'object' },
-            ],
-          },
-          objNotOk: {
-            not: { not: { type: 'object' } },
-          },
-          objNotBad: {
-            type: 'object',
-            not: { type: 'object' },
-          },
+          foo: { type: 'boolean', 'x-deprecated': 'Use bar instead.' },
+          bar: { type: 'boolean', 'x-deprecated': true },
+          buz: { type: 'boolean', 'x-deprecated': true },
+          bat: { type: 'boolean', 'x-deprecated': false },
         },
       })
       .pipe(
         mergeMap(validator => validator(data)),
         map(result => {
-          expect(result.success).toBe(true);
-          expect(data.bool).toBeUndefined();
-          expect(data.str).toBe('someString');
-          expect(data.obj.num).toBeUndefined();
-          expect(data.obj.other).toBe(0);
-          expect(data.objAllOk).toEqual({});
-          expect(data.objOne).toEqual({});
-          expect(data.objAllBad).toBeUndefined();
-          expect(data.objNotOk).toEqual({});
-          expect(data.objNotBad).toBeUndefined();
+          expect(deprecatedMessages.length).toBe(2);
+          expect(deprecatedMessages[0]).toBe('Option "foo" is deprecated: Use bar instead.');
+          expect(deprecatedMessages[1]).toBe('Option "bar" is deprecated.');
+          expect(result.success).toBe(true, result.errors);
         }),
       )
       .toPromise().then(done, done.fail);
   });
-
 });

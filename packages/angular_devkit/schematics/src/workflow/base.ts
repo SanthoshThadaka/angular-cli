@@ -7,8 +7,8 @@
  */
 import { logging, schema, virtualFs } from '@angular-devkit/core';
 import { EMPTY, Observable, Subject, concat, from, of, throwError } from 'rxjs';
-import { concatMap, defaultIfEmpty, ignoreElements, last, map, tap } from 'rxjs/operators';
-import { EngineHost, SchematicEngine } from '../engine';
+import { concatMap, defaultIfEmpty, ignoreElements, last, tap } from 'rxjs/operators';
+import { Engine, EngineHost, SchematicEngine } from '../engine';
 import { UnsuccessfulWorkflowExecution } from '../exception/exception';
 import { standardFormats } from '../formats';
 import { DryRunEvent, DryRunSink } from '../sink/dryrun';
@@ -16,7 +16,6 @@ import { HostSink } from '../sink/host';
 import { Sink } from '../sink/sink';
 import { HostTree } from '../tree/host-tree';
 import { Tree } from '../tree/interface';
-import { optimize } from '../tree/static';
 import {
   LifeCycleEvent,
   RequiredWorkflowExecutionContext,
@@ -46,7 +45,7 @@ export interface BaseWorkflowOptions {
  * @public
  */
 export abstract class BaseWorkflow implements Workflow {
-  protected _engine: SchematicEngine<{}, {}>;
+  protected _engine: Engine<{}, {}>;
   protected _engineHost: EngineHost<{}, {}>;
   protected _registry: schema.CoreSchemaRegistry;
 
@@ -86,6 +85,12 @@ export abstract class BaseWorkflow implements Workflow {
     }
 
     return maybeContext;
+  }
+  get engine(): Engine<{}, {}> {
+    return this._engine;
+  }
+  get engineHost(): EngineHost<{}, {}> {
+    return this._engineHost;
   }
   get registry(): schema.SchemaRegistry {
     return this._registry;
@@ -159,7 +164,6 @@ export abstract class BaseWorkflow implements Workflow {
       of(new HostTree(this._host)),
       { logger: context.logger },
     ).pipe(
-      map(tree => optimize(tree)),
       concatMap((tree: Tree) => {
         // Process all sinks.
         return concat(

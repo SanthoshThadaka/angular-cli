@@ -6,7 +6,8 @@
  * found in the LICENSE file at https://angular.io/license
  */
 import * as fs from 'fs';
-import { EMPTY, Observable, concat, from as observableFrom, throwError } from 'rxjs';
+import * as path from 'path';
+import { Observable, concat, from as observableFrom, of, throwError } from 'rxjs';
 import {
   concatMap,
   ignoreElements,
@@ -28,7 +29,7 @@ import {
 
 
 interface ChokidarWatcher {
-  new (options: {}): ChokidarWatcher;
+  new(options: {}): ChokidarWatcher;
 
   add(path: string): ChokidarWatcher;
   on(type: 'change', cb: (path: string) => void): ChokidarWatcher;
@@ -38,8 +39,24 @@ interface ChokidarWatcher {
   close(): void;
 }
 
-const { FSWatcher }: { FSWatcher: ChokidarWatcher } = require('chokidar');
-
+// This will only be initialized if the watch() method is called.
+// Otherwise chokidar appears only in type positions, and shouldn't be referenced
+// in the JavaScript output.
+let FSWatcher: ChokidarWatcher;
+function loadFSWatcher() {
+  if (!FSWatcher) {
+    try {
+      // tslint:disable-next-line:no-implicit-dependencies
+      FSWatcher = require('chokidar').FSWatcher;
+    } catch (e) {
+      if (e.code !== 'MODULE_NOT_FOUND') {
+        throw new Error('As of angular-devkit version 8.0, the "chokidar" package ' +
+          'must be installed in order to use watch() features.');
+      }
+      throw e;
+    }
+  }
+}
 
 type FsFunction0<R> = (cb: (err?: Error, result?: R) => void) => void;
 type FsFunction1<R, T1> = (p1: T1, cb: (err?: Error, result?: R) => void) => void;
@@ -75,26 +92,17 @@ export class NodeJsAsyncHost implements virtualFs.Host<fs.Stats> {
   }
 
   write(path: Path, content: virtualFs.FileBuffer): Observable<void> {
-    return new Observable<void>(obs => {
-      // Create folders if necessary.
-      const _createDir = (path: Path) => {
-        if (fs.existsSync(getSystemPath(path))) {
-          return;
-        }
-        if (dirname(path) === path) {
-          throw new Error();
-        }
-        _createDir(dirname(path));
-        fs.mkdirSync(getSystemPath(path));
-      };
-      _createDir(dirname(path));
-
-      _callFs<void, string, Uint8Array>(
+    return _callFs<void, string, fs.MakeDirectoryOptions>(
+      fs.mkdir,
+      getSystemPath(dirname(path)),
+      { recursive: true },
+    ).pipe(
+      mergeMap(() => _callFs<void, string, Uint8Array>(
         fs.writeFile,
         getSystemPath(path),
         new Uint8Array(content),
-      ).subscribe(obs);
-    });
+      )),
+    );
   }
 
   read(path: Path): Observable<virtualFs.FileBuffer> {
@@ -143,8 +151,8 @@ export class NodeJsAsyncHost implements virtualFs.Host<fs.Stats> {
   }
 
   list(path: Path): Observable<PathFragment[]> {
-    return _callFs(fs.readdir, getSystemPath(path)).pipe(
-      map(names => names.map(name => fragment(name))),
+    return _callFs<string[], string>(fs.readdir, getSystemPath(path)).pipe(
+      map((names) => names.map(name => fragment(name))),
     );
   }
 
@@ -165,7 +173,7 @@ export class NodeJsAsyncHost implements virtualFs.Host<fs.Stats> {
   }
   isFile(path: Path): Observable<boolean> {
     return _callFs(fs.stat, getSystemPath(path)).pipe(
-      map(stat => stat.isDirectory()),
+      map(stat => stat.isFile()),
     );
   }
 
@@ -180,6 +188,7 @@ export class NodeJsAsyncHost implements virtualFs.Host<fs.Stats> {
     _options?: virtualFs.HostWatchOptions,
   ): Observable<virtualFs.HostWatchEvent> | null {
     return new Observable<virtualFs.HostWatchEvent>(obs => {
+      loadFSWatcher();
       const watcher = new FSWatcher({ persistent: true }).add(getSystemPath(path));
 
       watcher
@@ -224,57 +233,30 @@ export class NodeJsSyncHost implements virtualFs.Host<fs.Stats> {
 
   write(path: Path, content: virtualFs.FileBuffer): Observable<void> {
     return new Observable(obs => {
-      // TODO: remove this try+catch when issue https://github.com/ReactiveX/rxjs/issues/3740 is
-      // fixed.
-      try {
-        // Create folders if necessary.
-        const _createDir = (path: Path) => {
-          if (fs.existsSync(getSystemPath(path))) {
-            return;
-          }
-          _createDir(dirname(path));
-          fs.mkdirSync(getSystemPath(path));
-        };
-        _createDir(dirname(path));
-        fs.writeFileSync(getSystemPath(path), new Uint8Array(content));
-
-        obs.next();
-        obs.complete();
-      } catch (err) {
-        obs.error(err);
-      }
+      fs.mkdirSync(getSystemPath(dirname(path)), { recursive: true });
+      fs.writeFileSync(getSystemPath(path), new Uint8Array(content));
+      obs.next();
+      obs.complete();
     });
   }
 
   read(path: Path): Observable<virtualFs.FileBuffer> {
     return new Observable(obs => {
-      // TODO: remove this try+catch when issue https://github.com/ReactiveX/rxjs/issues/3740 is
-      // fixed.
-      try {
-        const buffer = fs.readFileSync(getSystemPath(path));
+      const buffer = fs.readFileSync(getSystemPath(path));
 
-        obs.next(new Uint8Array(buffer).buffer as virtualFs.FileBuffer);
-        obs.complete();
-      } catch (err) {
-        obs.error(err);
-      }
+      obs.next(new Uint8Array(buffer).buffer as virtualFs.FileBuffer);
+      obs.complete();
     });
   }
 
   delete(path: Path): Observable<void> {
     return this.isDirectory(path).pipe(
       concatMap(isDir => {
-        // TODO: remove this try+catch when issue https://github.com/ReactiveX/rxjs/issues/3740 is
-        // fixed.
         if (isDir) {
           const dirPaths = fs.readdirSync(getSystemPath(path));
           const rmDirComplete = new Observable<void>((obs) => {
-            try {
-              fs.rmdirSync(getSystemPath(path));
-              obs.complete();
-            } catch (e) {
-              obs.error(e);
-            }
+            fs.rmdirSync(getSystemPath(path));
+            obs.complete();
           });
 
           return concat(
@@ -288,7 +270,7 @@ export class NodeJsSyncHost implements virtualFs.Host<fs.Stats> {
             return throwError(err);
           }
 
-          return EMPTY;
+          return of(undefined);
         }
       }),
     );
@@ -296,65 +278,43 @@ export class NodeJsSyncHost implements virtualFs.Host<fs.Stats> {
 
   rename(from: Path, to: Path): Observable<void> {
     return new Observable(obs => {
-      // TODO: remove this try+catch when issue https://github.com/ReactiveX/rxjs/issues/3740 is
-      // fixed.
-      try {
-        fs.renameSync(getSystemPath(from), getSystemPath(to));
-        obs.next();
-        obs.complete();
-      } catch (err) {
-        obs.error(err);
-      }
+      const toSystemPath = getSystemPath(to);
+      fs.mkdirSync(path.dirname(toSystemPath), { recursive: true });
+      fs.renameSync(getSystemPath(from), toSystemPath);
+      obs.next();
+      obs.complete();
     });
   }
 
   list(path: Path): Observable<PathFragment[]> {
     return new Observable(obs => {
-      // TODO: remove this try+catch when issue https://github.com/ReactiveX/rxjs/issues/3740 is
-      // fixed.
-      try {
-        const names = fs.readdirSync(getSystemPath(path));
-        obs.next(names.map(name => fragment(name)));
-        obs.complete();
-      } catch (err) {
-        obs.error(err);
-      }
+      const names = fs.readdirSync(getSystemPath(path));
+      obs.next(names.map(name => fragment(name)));
+      obs.complete();
     });
   }
 
   exists(path: Path): Observable<boolean> {
     return new Observable(obs => {
-      // TODO: remove this try+catch when issue https://github.com/ReactiveX/rxjs/issues/3740 is
-      // fixed.
-      try {
-        obs.next(fs.existsSync(getSystemPath(path)));
-        obs.complete();
-      } catch (err) {
-        obs.error(err);
-      }
+      obs.next(fs.existsSync(getSystemPath(path)));
+      obs.complete();
     });
   }
 
   isDirectory(path: Path): Observable<boolean> {
     // tslint:disable-next-line:no-non-null-assertion
-    return this.stat(path) !.pipe(map(stat => stat.isDirectory()));
+    return this.stat(path)!.pipe(map(stat => stat.isDirectory()));
   }
   isFile(path: Path): Observable<boolean> {
     // tslint:disable-next-line:no-non-null-assertion
-    return this.stat(path) !.pipe(map(stat => stat.isFile()));
+    return this.stat(path)!.pipe(map(stat => stat.isFile()));
   }
 
   // Some hosts may not support stat.
   stat(path: Path): Observable<virtualFs.Stats<fs.Stats>> {
     return new Observable(obs => {
-      // TODO: remove this try+catch when issue https://github.com/ReactiveX/rxjs/issues/3740 is
-      // fixed.
-      try {
-        obs.next(fs.statSync(getSystemPath(path)));
-        obs.complete();
-      } catch (err) {
-        obs.error(err);
-      }
+      obs.next(fs.statSync(getSystemPath(path)));
+      obs.complete();
     });
   }
 
@@ -365,6 +325,7 @@ export class NodeJsSyncHost implements virtualFs.Host<fs.Stats> {
   ): Observable<virtualFs.HostWatchEvent> | null {
     return new Observable<virtualFs.HostWatchEvent>(obs => {
       const opts = { persistent: false };
+      loadFSWatcher();
       const watcher = new FSWatcher(opts).add(getSystemPath(path));
 
       watcher

@@ -8,13 +8,10 @@
 import {
   JsonArray,
   JsonObject,
-  JsonParseMode,
   Path,
   join,
   logging,
   normalize,
-  parseJson,
-  parseJsonAst,
   tags,
 } from '@angular-devkit/core';
 import {
@@ -25,17 +22,15 @@ import {
   chain,
 } from '@angular-devkit/schematics';
 import { NodePackageInstallTask } from '@angular-devkit/schematics/tasks';
-import { AppConfig, CliConfig } from '../../utility/config';
+import { parse as parseJson } from 'jsonc-parser';
 import {
   NodeDependency,
   NodeDependencyType,
   addPackageJsonDependency,
 } from '../../utility/dependencies';
-import {
-  appendValueInAstArray,
-  findPropertyInAstObject,
-} from '../../utility/json-utils';
+import { JSONFile } from '../../utility/json-file';
 import { latestVersions } from '../../utility/latest-versions';
+import { AppConfig, CliConfig } from './config';
 
 const defaults = {
   appRoot: 'src',
@@ -260,7 +255,7 @@ function extractProjectsConfig(
       const outDir = app.outDir || defaults.outDir;
       const appRoot = app.root || defaults.appRoot;
 
-      function _mapAssets(asset: string | JsonObject) {
+      function _mapAssets(asset: string | { glob?: string; input?: string; output?: string; allowOutsideOutDir?: boolean}) {
         if (typeof asset === 'string') {
           return normalize(appRoot + '/' + asset);
         } else {
@@ -268,6 +263,13 @@ function extractProjectsConfig(
             logger.warn(tags.oneLine`
               Asset with input '${asset.input}' was not migrated because it
               uses the 'allowOutsideOutDir' option which is not supported in Angular CLI 6.
+            `);
+
+            return null;
+          } else if (!asset.glob) {
+            logger.warn(tags.oneLine`
+              Asset with input '${asset.input}' was not migrated because it
+              does not contain a glob property.
             `);
 
             return null;
@@ -556,7 +558,6 @@ function extractProjectsConfig(
 
       const e2eTargets: JsonObject = {};
 
-      // tslint:disable-next-line:max-line-length
       const protractorConfig = config && config.e2e && config.e2e.protractor && config.e2e.protractor.config
         ? config.e2e.protractor.config
         : '';
@@ -618,41 +619,35 @@ function extractDefaultProject(config: CliConfig): string | null {
 }
 
 function updateSpecTsConfig(config: CliConfig): Rule {
-  return (host: Tree, context: SchematicContext) => {
+  return (host) => {
     const apps = config.apps || [];
-    apps.forEach((app: AppConfig, idx: number) => {
+    apps.forEach((app: AppConfig) => {
       const testTsConfig = app.testTsconfig || defaults.testTsConfig;
       const tsSpecConfigPath = join(normalize(app.root || ''), testTsConfig);
-      const buffer = host.read(tsSpecConfigPath);
 
-      if (!buffer) {
+      let tsConfigJson;
+      try {
+        tsConfigJson = new JSONFile(host, tsSpecConfigPath);
+      } catch {
         return;
       }
 
-
-      const tsCfgAst = parseJsonAst(buffer.toString(), JsonParseMode.Loose);
-      if (tsCfgAst.kind != 'object') {
-        throw new SchematicsException('Invalid tsconfig. Was expecting an object');
+      const files = tsConfigJson.get(['files']);
+      if (files === undefined) {
+        // Do nothing if the files array does not exist. This means exclude or include are
+        // set and we shouldn't mess with that.
+        return;
       }
 
-      const filesAstNode = findPropertyInAstObject(tsCfgAst, 'files');
-      if (filesAstNode && filesAstNode.kind != 'array') {
+      if (!Array.isArray(files)) {
         throw new SchematicsException('Invalid tsconfig "files" property; expected an array.');
       }
 
-      const recorder = host.beginUpdate(tsSpecConfigPath);
-
       const polyfills = app.polyfills || defaults.polyfills;
-      if (!filesAstNode) {
-        // Do nothing if the files array does not exist. This means exclude or include are
-        // set and we shouldn't mess with that.
-      } else {
-        if (filesAstNode.value.indexOf(polyfills) == -1) {
-          appendValueInAstArray(recorder, filesAstNode, polyfills);
-        }
+      if (polyfills && !files.includes(polyfills)) {
+        // Append polyfills file to the files array
+        tsConfigJson.modify(['files', -1], polyfills);
       }
-
-      host.commitUpdate(recorder);
     });
   };
 }
@@ -676,111 +671,63 @@ function updatePackageJson(config: CliConfig) {
 }
 
 function updateTsLintConfig(): Rule {
-  return (host: Tree, context: SchematicContext) => {
+  return (host) => {
     const tsLintPath = '/tslint.json';
-    const buffer = host.read(tsLintPath);
-    if (!buffer) {
-      return host;
-    }
-    const tsCfgAst = parseJsonAst(buffer.toString(), JsonParseMode.Loose);
 
-    if (tsCfgAst.kind != 'object') {
-      return host;
+    let tsLintJson;
+    try {
+      tsLintJson = new JSONFile(host, tsLintPath);
+    } catch {
+      return;
     }
 
-    const rulesNode = findPropertyInAstObject(tsCfgAst, 'rules');
-    if (!rulesNode || rulesNode.kind != 'object') {
-      return host;
+    const rulePath = ['rules', 'import-blacklist'];
+    const currentRuleItems = tsLintJson.get(rulePath);
+    if (!currentRuleItems || !Array.isArray(currentRuleItems)) {
+      return;
     }
 
-    const importBlacklistNode = findPropertyInAstObject(rulesNode, 'import-blacklist');
-    if (!importBlacklistNode || importBlacklistNode.kind != 'array') {
-      return host;
-    }
-
-    const recorder = host.beginUpdate(tsLintPath);
-    for (let i = 0; i < importBlacklistNode.elements.length; i++) {
-      const element = importBlacklistNode.elements[i];
-      if (element.kind == 'string' && element.value == 'rxjs') {
-        const { start, end } = element;
-        // Remove this element.
-        if (i == importBlacklistNode.elements.length - 1) {
-          // Last element.
-          if (i > 0) {
-            // Not first, there's a comma to remove before.
-            const previous = importBlacklistNode.elements[i - 1];
-            recorder.remove(previous.end.offset, end.offset - previous.end.offset);
-          } else {
-            // Only element, just remove the whole rule.
-            const { start, end } = importBlacklistNode;
-            recorder.remove(start.offset, end.offset - start.offset);
-            recorder.insertLeft(start.offset, '[]');
-          }
-        } else {
-          // Middle, just remove the whole node (up to next node start).
-          const next = importBlacklistNode.elements[i + 1];
-          recorder.remove(start.offset, next.start.offset - start.offset);
-        }
-      }
-    }
-
-    host.commitUpdate(recorder);
-
-    return host;
+    // Remove all occurences of rxjs
+    const newRuleItems = currentRuleItems.filter(value => value !== 'rxjs');
+    tsLintJson.modify(rulePath, newRuleItems);
   };
 }
 
 function updateRootTsConfig(): Rule {
   return (host: Tree, context: SchematicContext) => {
     const tsConfigPath = '/tsconfig.json';
-    const buffer = host.read(tsConfigPath);
-    if (!buffer) {
+
+    let tsConfigJson;
+    try {
+      tsConfigJson = new JSONFile(host, tsConfigPath);
+    } catch {
       return;
     }
 
-    const tsCfgAst = parseJsonAst(buffer.toString(), JsonParseMode.Loose);
-    if (tsCfgAst.kind !== 'object') {
-      throw new SchematicsException('Invalid root tsconfig. Was expecting an object');
+    const baseUrlPath = ['compilerOptions', 'baseUrl'];
+    const baseUrl = tsConfigJson.get(baseUrlPath);
+    if (baseUrl === undefined || typeof baseUrl !== 'string') {
+      tsConfigJson.modify(baseUrlPath, './');
+    } else {
+      const validBaseUrl = ['./', '', '.'];
+      if (!validBaseUrl.includes(baseUrl)) {
+        const formattedBaseUrl = validBaseUrl.map(x => `'${x}'`).join(', ');
+        context.logger.warn(tags.oneLine
+          `Root tsconfig option 'baseUrl' is not one of: ${formattedBaseUrl}.
+          This might cause unexpected behaviour when generating libraries.`,
+        );
+      }
     }
 
-    const compilerOptionsAstNode = findPropertyInAstObject(tsCfgAst, 'compilerOptions');
-    if (!compilerOptionsAstNode || compilerOptionsAstNode.kind != 'object') {
-      throw new SchematicsException(
-        'Invalid root tsconfig "compilerOptions" property; expected an object.',
-      );
-    }
-
-    if (
-      findPropertyInAstObject(compilerOptionsAstNode, 'baseUrl') &&
-      findPropertyInAstObject(compilerOptionsAstNode, 'module')
-    ) {
-      return host;
-    }
-
-    const compilerOptions = compilerOptionsAstNode.value;
-    const { baseUrl = './', module = 'es2015'} = compilerOptions;
-
-    const validBaseUrl = ['./', '', '.'];
-    if (!validBaseUrl.includes(baseUrl as string)) {
-      const formattedBaseUrl = validBaseUrl.map(x => `'${x}'`).join(', ');
-      context.logger.warn(tags.oneLine
-        `Root tsconfig option 'baseUrl' is not one of: ${formattedBaseUrl}.
-        This might cause unexpected behaviour when generating libraries.`,
-      );
-    }
-
-    if (module !== 'es2015') {
+    const modulePath = ['compilerOptions', 'module'];
+    const module = tsConfigJson.get(modulePath);
+    if (module === undefined || typeof module !== 'string') {
+      tsConfigJson.modify(modulePath, 'es2015');
+    } else if (module.toLowerCase() !== 'es2015') {
       context.logger.warn(
         `Root tsconfig option 'module' is not 'es2015'. This might cause unexpected behaviour.`,
       );
     }
-
-    compilerOptions.module = module;
-    compilerOptions.baseUrl = baseUrl;
-
-    host.overwrite(tsConfigPath, JSON.stringify(tsCfgAst.value, null, 2));
-
-    return host;
   };
 }
 
@@ -797,7 +744,7 @@ export default function (): Rule {
     if (configBuffer == null) {
       throw new SchematicsException(`Could not find configuration file (${configPath})`);
     }
-    const config = parseJson(configBuffer.toString(), JsonParseMode.Loose);
+    const config = parseJson(configBuffer.toString());
 
     if (typeof config != 'object' || Array.isArray(config) || config === null) {
       throw new SchematicsException('Invalid angular-cli.json configuration; expected an object.');

@@ -8,10 +8,6 @@
 
 export * from './exception/exception';
 
- // Start experimental namespace
-export * from './workspace/index';
-// End experimental namespace
-
 // Start json namespace
 export * from './json/interface';
 export * from './json/parser';
@@ -31,11 +27,6 @@ export * from './logger/null-logger';
 export * from './logger/transform-logger';
 // End logging namespace
 
-// Start terminal namespace
-export * from './terminal/text';
-export * from './terminal/colors';
-// End terminal namespace
-
 // Start utils namespace
 export * from './utils/literals';
 export * from './utils/strings';
@@ -51,3 +42,11 @@ export * from './utils/lang';
 export * from './virtual-fs/path';
 export * from './virtual-fs/host/index';
 // End virtualFs namespace
+
+// Start workspace namespace
+export * from './workspace/index';
+// End workspace namespace
+
+// Start analytics namespace
+export * from './analytics/index';
+// End analytics namespace

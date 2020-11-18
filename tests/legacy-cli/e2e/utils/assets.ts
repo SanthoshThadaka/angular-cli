@@ -1,11 +1,10 @@
-import {join} from 'path';
+import { join } from 'path';
 import * as glob from 'glob';
-import {getGlobalVariable} from './env';
-import {relative} from 'path';
-import {copyFile} from './fs';
-import {useBuiltPackages} from './project';
-import { git, silentNpm } from './process';
-
+import { getGlobalVariable } from './env';
+import { relative, resolve } from 'path';
+import { copyFile, writeFile } from './fs';
+import { installWorkspacePackages } from './packages';
+import { useBuiltPackages } from './project';
 
 export function assetDir(assetName: string) {
   return join(__dirname, '../assets', assetName);
@@ -19,7 +18,7 @@ export function copyProjectAsset(assetName: string, to?: string) {
   return copyFile(sourcePath, targetPath);
 }
 
-export function copyAssets(assetName: string) {
+export function copyAssets(assetName: string, to?: string) {
   const seed = +Date.now();
   const tempRoot = join(getGlobalVariable('tmp-root'), 'assets', assetName + '-' + seed);
   const root = assetDir(assetName);
@@ -30,7 +29,10 @@ export function copyAssets(assetName: string) {
 
       return allFiles.reduce((promise, filePath) => {
         const relPath = relative(root, filePath);
-        const toPath = join(tempRoot, relPath);
+        const toPath =
+          to !== undefined
+            ? resolve(getGlobalVariable('tmp-root'), 'test-project', to, relPath)
+            : join(tempRoot, relPath);
 
         return promise.then(() => copyFile(filePath, toPath));
       }, Promise.resolve());
@@ -38,11 +40,21 @@ export function copyAssets(assetName: string) {
     .then(() => tempRoot);
 }
 
+export async function createProjectFromAsset(
+  assetName: string,
+  useNpmPackages = false,
+  skipInstall = false,
+) {
+  const dir = await copyAssets(assetName);
+  process.chdir(dir);
+  if (!useNpmPackages) {
+    await useBuiltPackages();
+    await writeFile('.npmrc', 'registry = http://localhost:4873', 'utf8');
+  }
 
-export function createProjectFromAsset(assetName: string) {
-  return Promise.resolve()
-    .then(() => copyAssets(assetName))
-    .then(dir => process.chdir(dir))
-    .then(() => useBuiltPackages())
-    .then(() => silentNpm('install'));
+  if (!skipInstall) {
+    await installWorkspacePackages(false);
+  }
+
+  return dir;
 }

@@ -1,5 +1,5 @@
 ---
-name: "\U0001F680Feature request"
+name: "\U0001F680 Feature request"
 about: Suggest a feature for Angular CLI
 
 ---
@@ -19,7 +19,6 @@ Existing issues often contain information about workarounds, resolution, or prog
 ### Command (mark with an `x`)
 <!-- Can you pin-point the command or commands that are relevant for this feature request? -->
 <!-- ✍️edit: -->
-```
 - [ ] new
 - [ ] build
 - [ ] serve
@@ -29,13 +28,12 @@ Existing issues often contain information about workarounds, resolution, or prog
 - [ ] add
 - [ ] update
 - [ ] lint
-- [ ] xi18n
+- [ ] extract-i18n
 - [ ] run
 - [ ] config
 - [ ] help
 - [ ] version
 - [ ] doc
-```
 
 ### Description
 <!-- ✍️--> A clear and concise description of the problem or missing capability...

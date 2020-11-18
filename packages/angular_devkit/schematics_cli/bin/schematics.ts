@@ -7,25 +7,14 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import 'symbol-observable';
 // symbol polyfill must go first
+import 'symbol-observable';
 // tslint:disable-next-line:ordered-imports import-groups
-import {
-  JsonObject,
-  logging,
-  normalize,
-  schema,
-  tags,
-  terminal,
-  virtualFs,
-} from '@angular-devkit/core';
-import { NodeJsSyncHost, ProcessOutput, createConsoleLogger } from '@angular-devkit/core/node';
-import {
-  DryRunEvent,
-  SchematicEngine,
-  UnsuccessfulWorkflowExecution,
-} from '@angular-devkit/schematics';
-import { NodeModulesEngineHost, NodeWorkflow } from '@angular-devkit/schematics/tools';
+import { logging, schema, tags } from '@angular-devkit/core';
+import { ProcessOutput, createConsoleLogger } from '@angular-devkit/core/node';
+import { UnsuccessfulWorkflowExecution } from '@angular-devkit/schematics';
+import { NodeWorkflow } from '@angular-devkit/schematics/tools';
+import * as ansiColors from 'ansi-colors';
 import * as inquirer from 'inquirer';
 import * as minimist from 'minimist';
 
@@ -63,12 +52,10 @@ export interface MainOptions {
 }
 
 
-function _listSchematics(collectionName: string, logger: logging.Logger) {
+function _listSchematics(workflow: NodeWorkflow, collectionName: string, logger: logging.Logger) {
   try {
-    const engineHost = new NodeModulesEngineHost();
-    const engine = new SchematicEngine(engineHost);
-    const collection = engine.createCollection(collectionName);
-    logger.info(engine.listSchematicNames(collection).join('\n'));
+    const collection = workflow.engine.createCollection(collectionName);
+    logger.info(collection.listSchematicNames().join('\n'));
   } catch (error) {
     logger.fatal(error.message);
 
@@ -79,8 +66,8 @@ function _listSchematics(collectionName: string, logger: logging.Logger) {
 }
 
 function _createPromptProvider(): schema.PromptProvider {
-  return (definitions: Array<schema.PromptDefinition>) => {
-    const questions: inquirer.Questions = definitions.map(definition => {
+  return (definitions) => {
+    const questions: inquirer.QuestionCollection = definitions.map(definition => {
       const question: inquirer.Question = {
         name: definition.id,
         message: definition.message,
@@ -119,6 +106,7 @@ function _createPromptProvider(): schema.PromptProvider {
   };
 }
 
+// tslint:disable-next-line: no-big-function
 export async function main({
   args,
   stdout = process.stdout,
@@ -126,8 +114,19 @@ export async function main({
 }: MainOptions): Promise<0 | 1> {
   const argv = parseArgs(args);
 
+  // Create a separate instance to prevent unintended global changes to the color configuration
+  // Create function is not defined in the typings. See: https://github.com/doowb/ansi-colors/pull/44
+  const colors = (ansiColors as typeof ansiColors & { create: () => typeof ansiColors }).create();
+
   /** Create the DevKit Logger used through the CLI. */
-  const logger = createConsoleLogger(argv['verbose'], stdout, stderr);
+  const logger = createConsoleLogger(argv['verbose'], stdout, stderr, {
+    info: s => s,
+    debug: s => s,
+    warn: s => colors.bold.yellow(s),
+    error: s => colors.bold.red(s),
+    fatal: s => colors.bold.red(s),
+  });
+
   if (argv.help) {
     logger.info(getUsage());
 
@@ -139,18 +138,8 @@ export async function main({
     collection: collectionName,
     schematic: schematicName,
   } = parseSchematicName(argv._.shift() || null);
+
   const isLocalCollection = collectionName.startsWith('.') || collectionName.startsWith('/');
-
-  /** If the user wants to list schematics, we simply show all the schematic names. */
-  if (argv['list-schematics']) {
-    return _listSchematics(collectionName, logger);
-  }
-
-  if (!schematicName) {
-    logger.info(getUsage());
-
-    return 1;
-  }
 
   /** Gather the arguments for later use. */
   const debug: boolean = argv.debug === null ? isLocalCollection : argv.debug;
@@ -158,11 +147,24 @@ export async function main({
   const force = argv['force'];
   const allowPrivate = argv['allow-private'];
 
-  /** Create a Virtual FS Host scoped to where the process is being run. **/
-  const fsHost = new virtualFs.ScopedHost(new NodeJsSyncHost(), normalize(process.cwd()));
+  /** Create the workflow scoped to the working directory that will be executed with this run. */
+  const workflow = new NodeWorkflow(process.cwd(), {
+    force,
+    dryRun,
+    resolvePaths: [process.cwd(), __dirname],
+    schemaValidation: true,
+  });
 
-  /** Create the workflow that will be executed with this run. */
-  const workflow = new NodeWorkflow(fsHost, { force, dryRun });
+  /** If the user wants to list schematics, we simply show all the schematic names. */
+  if (argv['list-schematics']) {
+    return _listSchematics(workflow, collectionName, logger);
+  }
+
+  if (!schematicName) {
+    logger.info(getUsage());
+
+    return 1;
+  }
 
   // Indicate to the user when nothing has been done. This is automatically set to off when there's
   // a new DryRunEvent.
@@ -183,31 +185,30 @@ export async function main({
    *
    * This is a simple way to only show errors when an error occur.
    */
-  workflow.reporter.subscribe((event: DryRunEvent) => {
+  workflow.reporter.subscribe((event) => {
     nothingDone = false;
+    // Strip leading slash to prevent confusion.
+    const eventPath = event.path.startsWith('/') ? event.path.substr(1) : event.path;
 
     switch (event.kind) {
       case 'error':
         error = true;
 
         const desc = event.description == 'alreadyExist' ? 'already exists' : 'does not exist';
-        logger.warn(`ERROR! ${event.path} ${desc}.`);
+        logger.error(`ERROR! ${eventPath} ${desc}.`);
         break;
       case 'update':
-        loggingQueue.push(tags.oneLine`
-        ${terminal.white('UPDATE')} ${event.path} (${event.content.length} bytes)
-      `);
+        loggingQueue.push(`${colors.cyan('UPDATE')} ${eventPath} (${event.content.length} bytes)`);
         break;
       case 'create':
-        loggingQueue.push(tags.oneLine`
-        ${terminal.green('CREATE')} ${event.path} (${event.content.length} bytes)
-      `);
+        loggingQueue.push(`${colors.green('CREATE')} ${eventPath} (${event.content.length} bytes)`);
         break;
       case 'delete':
-        loggingQueue.push(`${terminal.yellow('DELETE')} ${event.path}`);
+        loggingQueue.push(`${colors.yellow('DELETE')} ${eventPath}`);
         break;
       case 'rename':
-        loggingQueue.push(`${terminal.blue('RENAME')} ${event.path} => ${event.to}`);
+        const eventToPath = event.to.startsWith('/') ? event.to.substr(1) : event.to;
+        loggingQueue.push(`${colors.blue('RENAME')} ${eventPath} => ${eventToPath}`);
         break;
     }
   });
@@ -246,19 +247,24 @@ export async function main({
     parsedArgs[key] = argv2[key];
   }
 
+  // Show usage of deprecated options
+  workflow.registry.useXDeprecatedProvider(msg => logger.warn(msg));
+
   // Pass the rest of the arguments as the smart default "argv". Then delete it.
-  workflow.registry.addSmartDefaultProvider('argv', (schema: JsonObject) => {
+  workflow.registry.addSmartDefaultProvider('argv', (schema) => {
     if ('index' in schema) {
       return argv._[Number(schema['index'])];
     } else {
       return argv._;
     }
   });
-  delete parsedArgs._;
+
+  parsedArgs._  = [];
 
   // Add prompts.
-  workflow.registry.usePromptProvider(_createPromptProvider());
-
+  if (argv['interactive'] && isTTY()) {
+    workflow.registry.usePromptProvider(_createPromptProvider());
+  }
 
   /**
    *  Execute the workflow, which will report the dry run events, run the tasks, and complete
@@ -324,6 +330,8 @@ function getUsage(): string {
       --list-schematics   List all schematics from the collection, by name. A collection name
                           should be suffixed by a colon. Example: '@schematics/schematics:'.
 
+      --no-interactive    Disables interactive input prompts.
+
       --verbose           Show more information.
 
       --help              Show this message.
@@ -344,6 +352,7 @@ const booleanArgs = [
   'list-schematics',
   'listSchematics',
   'verbose',
+  'interactive',
 ];
 
 function parseArgs(args: string[] | undefined): minimist.ParsedArgs {
@@ -355,11 +364,27 @@ function parseArgs(args: string[] | undefined): minimist.ParsedArgs {
         'allowPrivate': 'allow-private',
       },
       default: {
+        'interactive': true,
         'debug': null,
         'dryRun': null,
       },
       '--': true,
     });
+}
+
+function isTTY(): boolean {
+  const isTruthy = (value: undefined | string) => {
+    // Returns true if value is a string that is anything but 0 or false.
+    return value !== undefined && value !== '0' && value.toUpperCase() !== 'FALSE';
+  };
+
+  // If we force TTY, we always return true.
+  const force = process.env['NG_FORCE_TTY'];
+  if (force !== undefined) {
+    return isTruthy(force);
+  }
+
+  return !!process.stdout.isTTY && !isTruthy(process.env['CI']);
 }
 
 if (require.main === module) {

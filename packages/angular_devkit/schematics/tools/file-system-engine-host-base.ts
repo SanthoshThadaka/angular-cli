@@ -10,18 +10,20 @@ import {
   InvalidJsonCharacterException,
   JsonObject,
   UnexpectedEndOfInputException,
-  isObservable,
   normalize,
   virtualFs,
 } from '@angular-devkit/core';
 import { NodeJsSyncHost } from '@angular-devkit/core/node';
 import { existsSync, statSync } from 'fs';
 import { dirname, isAbsolute, join, resolve } from 'path';
-import { Observable, from as observableFrom, of as observableOf, throwError } from 'rxjs';
-import { mergeMap } from 'rxjs/operators';
+import {
+  Observable,
+  from as observableFrom,
+  isObservable,
+  throwError,
+} from 'rxjs';
 import { Url } from 'url';
 import {
-  EngineHost,
   HostCreateTree,
   RuleFactory,
   Source,
@@ -30,9 +32,8 @@ import {
   UnregisteredTaskException,
 } from '../src';
 import {
-  FileSystemCollection,
   FileSystemCollectionDesc,
-  FileSystemCollectionDescription,
+  FileSystemEngineHost,
   FileSystemSchematicContext,
   FileSystemSchematicDesc,
   FileSystemSchematicDescription,
@@ -45,7 +46,9 @@ export declare type OptionTransform<T extends object, R extends object>
       schematic: FileSystemSchematicDescription,
       options: T,
       context?: FileSystemSchematicContext,
-    ) => Observable<R>;
+    ) => Observable<R> | PromiseLike<R> | R;
+export declare type ContextTransform
+    = (context: FileSystemSchematicContext) => FileSystemSchematicContext;
 
 
 export class CollectionCannotBeResolvedException extends BaseException {
@@ -102,9 +105,8 @@ export class SchematicNameCollisionException extends BaseException {
  * A EngineHost base class that uses the file system to resolve collections. This is the base of
  * all other EngineHost provided by the tooling part of the Schematics library.
  */
-export abstract class FileSystemEngineHostBase implements
-    EngineHost<FileSystemCollectionDescription, FileSystemSchematicDescription> {
-  protected abstract _resolveCollectionPath(name: string): string;
+export abstract class FileSystemEngineHostBase implements FileSystemEngineHost {
+  protected abstract _resolveCollectionPath(name: string, requester?: string): string;
   protected abstract _resolveReferenceString(
       name: string, parentPath: string): { ref: RuleFactory<{}>, path: string } | null;
   protected abstract _transformCollectionDescription(
@@ -114,15 +116,11 @@ export abstract class FileSystemEngineHostBase implements
       collection: FileSystemCollectionDesc,
       desc: Partial<FileSystemSchematicDesc>): FileSystemSchematicDesc;
 
-  private _transforms: OptionTransform<{}, {}>[] = [];
+  // tslint:disable-next-line:no-any
+  private _transforms: OptionTransform<any, any>[] = [];
+  private _contextTransforms: ContextTransform[] = [];
   private _taskFactories = new Map<string, () => Observable<TaskExecutor>>();
 
-  /**
-   * @deprecated Use `listSchematicNames`.
-   */
-  listSchematics(collection: FileSystemCollection): string[] {
-    return this.listSchematicNames(collection.description);
-  }
   listSchematicNames(collection: FileSystemCollectionDesc) {
     const schematics: string[] = [];
     for (const key of Object.keys(collection.schematics)) {
@@ -148,13 +146,20 @@ export abstract class FileSystemEngineHostBase implements
     this._transforms.push(t);
   }
 
+  registerContextTransform(t: ContextTransform) {
+    this._contextTransforms.push(t);
+  }
+
   /**
    *
    * @param name
    * @return {{path: string}}
    */
-  createCollectionDescription(name: string): FileSystemCollectionDesc {
-    const path = this._resolveCollectionPath(name);
+  createCollectionDescription(
+    name: string,
+    requester?: FileSystemCollectionDesc,
+  ): FileSystemCollectionDesc {
+    const path = this._resolveCollectionPath(name, requester?.path);
     const jsonValue = readJsonFile(path);
     if (!jsonValue || typeof jsonValue != 'object' || Array.isArray(jsonValue)) {
       throw new InvalidCollectionJsonException(name, path);
@@ -270,10 +275,16 @@ export abstract class FileSystemEngineHostBase implements
     switch (url.protocol) {
       case null:
       case 'file:':
-        return (context: FileSystemSchematicContext) => {
+        return (context) => {
+          // Check if context has necessary FileSystemSchematicContext path property
+          const fileDescription = context.schematic.description as { path?: string };
+          if (fileDescription.path === undefined) {
+            throw new Error('Unsupported schematic context. Expected a FileSystemSchematicContext.');
+          }
+
           // Resolve all file:///a/b/c/d from the schematic's own path, and not the current
           // path.
-          const root = normalize(resolve(context.schematic.description.path, url.path || ''));
+          const root = normalize(resolve(fileDescription.path, url.path || ''));
 
           return new HostCreateTree(new virtualFs.ScopedHost(new NodeJsSyncHost(), root));
         };
@@ -287,22 +298,22 @@ export abstract class FileSystemEngineHostBase implements
     options: OptionT,
     context?: FileSystemSchematicContext,
   ): Observable<ResultT> {
-    // tslint:disable-next-line:no-any https://github.com/ReactiveX/rxjs/issues/3989
-    return ((observableOf(options) as any)
-      .pipe(
-        ...this._transforms.map(tFn => mergeMap(opt => {
-          const newOptions = tFn(schematic, opt, context);
-          if (isObservable(newOptions)) {
-            return newOptions;
-          } else {
-            return observableOf(newOptions);
-          }
-        })),
-      )) as {} as Observable<ResultT>;
+    const transform = async () => {
+      let transformedOptions = options;
+      for (const transformer of this._transforms) {
+        const transformerResult = transformer(schematic, transformedOptions, context);
+        transformedOptions = await (isObservable(transformerResult) ? transformerResult.toPromise() : transformerResult);
+      }
+
+      return transformedOptions;
+    };
+
+    return observableFrom(transform()) as unknown as Observable<ResultT>;
   }
 
   transformContext(context: FileSystemSchematicContext): FileSystemSchematicContext {
-    return context;
+    // tslint:disable-next-line:no-any https://github.com/ReactiveX/rxjs/issues/3989
+    return this._contextTransforms.reduce((acc, curr) => curr(acc), context);
   }
 
   getSchematicRuleFactory<OptionT extends object>(
